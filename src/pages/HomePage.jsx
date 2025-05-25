@@ -1,71 +1,35 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useCallback } from 'react';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { useToast } from '@/components/ui/use-toast';
-import { Link as LinkIcon, CheckCircle, Info } from 'lucide-react';
+import { Link as LinkIcon, ArrowDownCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 import SpotifyUrlForm from '@/components/homepage/SpotifyUrlForm';
 import SongDisplay from '@/components/homepage/SongDisplay';
 import LoadingIndicator from '@/components/homepage/LoadingIndicator';
 import ErrorMessage from '@/components/homepage/ErrorMessage';
-import { Button } from '@/components/ui/button';
+import DownloadHistorySection from '@/components/homepage/DownloadHistorySection';
+import AppDownloadSection from '@/components/homepage/AppDownloadSection';
+
+import { useSpotifyDownloader } from '@/hooks/useSpotifyDownloader';
+import { useDownloadHistory } from '@/hooks/useDownloadHistory';
+import { useClipboardHandler } from '@/hooks/useClipboardHandler';
+
 
 const HomePage = () => {
   const [spotifyUrl, setSpotifyUrl] = useState('');
-  const [songData, setSongData] = useState(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState(null);
   const { toast } = useToast();
+  const appDownloadSectionRef = useRef(null);
 
-  const API_BASE_URL = 'https://apis.davidcyriltech.my.id/spotifydl?url=';
-
-  const isValidSpotifyUrl = (url) => {
-    try {
-      const parsedUrl = new URL(url);
-      return parsedUrl.hostname === 'open.spotify.com' && parsedUrl.pathname.includes('/track/');
-    } catch (e) {
-      return false;
-    }
-  };
-
-  const fetchSongData = async (urlToFetch) => {
-    if (!isValidSpotifyUrl(urlToFetch)) {
-      setError('Please enter a valid Spotify song URL (e.g., https://open.spotify.com/track/...).');
-      toast({ variant: 'destructive', title: 'Invalid URL', description: 'Please enter a valid Spotify song URL.' });
-      setIsLoading(false);
-      return;
-    }
-
-    setIsLoading(true);
-    setError(null);
-    setSongData(null);
-
-    try {
-      const response = await fetch(`${API_BASE_URL}${encodeURIComponent(urlToFetch)}`);
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ message: `HTTP error! status: ${response.status}` }));
-        throw new Error(errorData.message || `Failed to fetch song data. Status: ${response.status}`);
-      }
-      const data = await response.json();
-
-      if (data.success && data.title && data.DownloadLink) {
-        setSongData(data);
-        toast({ 
-          title: 'Song Found!', 
-          description: data.title,
-          action: <CheckCircle className="text-spotify-green" />
-        });
-      } else {
-        throw new Error(data.message || 'Could not retrieve song information. The API might be down or the link is invalid.');
-      }
-    } catch (err) {
-      console.error("API Error:", err);
-      setError(err.message || 'An unexpected error occurred.');
-      toast({ variant: 'destructive', title: 'Error', description: err.message || 'Failed to fetch song data.' });
-    } finally {
-      setIsLoading(false);
-    }
-  };
+  const { downloadHistory, updateDownloadHistory, clearDownloadHistory } = useDownloadHistory();
+  const { songData, isLoading, error, fetchSongData, setError } = useSpotifyDownloader(updateDownloadHistory);
+  const { handlePasteFromManualButton, checkClipboardOnFocus } = useClipboardHandler(spotifyUrl, setSpotifyUrl);
+  
+  const handleHistoryItemClick = useCallback((itemSpotifyUrl) => {
+    setSpotifyUrl(itemSpotifyUrl);
+    toast({ title: 'URL Loaded from History', description: 'Press "Fetch Song" to get details.'});
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }, [toast]);
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -77,76 +41,9 @@ const HomePage = () => {
     fetchSongData(spotifyUrl);
   };
 
-  const handlePasteFromClipboard = async () => {
-    try {
-      const text = await navigator.clipboard.readText();
-      if (text) {
-        setSpotifyUrl(text);
-        toast({ 
-          title: 'Pasted from clipboard!', 
-          description: 'URL populated from clipboard.',
-          action: <CheckCircle className="text-spotify-green" />
-        });
-      } else {
-        toast({ variant: 'destructive', title: 'Clipboard Empty', description: 'Nothing to paste from clipboard.'});
-      }
-    } catch (err) {
-      console.error('Failed to read clipboard contents: ', err);
-      toast({ variant: 'destructive', title: 'Paste Error', description: 'Could not read from clipboard. Check permissions.'});
-    }
+  const scrollToAppDownload = () => {
+    appDownloadSectionRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
-  
-  const checkClipboardOnFocus = useCallback(async () => {
-    try {
-      if (navigator.clipboard && typeof navigator.clipboard.readText === 'function') {
-        const text = await navigator.clipboard.readText();
-        if (text && isValidSpotifyUrl(text) && spotifyUrl === '') { 
-          toast({
-            title: 'Spotify Link Detected!',
-            description: (
-              <div>
-                <p className="mb-2">We found a Spotify link in your clipboard:</p>
-                <p className="text-xs bg-spotify-gray p-2 rounded break-all mb-3">{text}</p>
-                <p>Would you like to paste it into the input field?</p>
-              </div>
-            ),
-            duration: 10000, // Keep toast longer for user to react
-            action: (
-              <Button 
-                variant="outline" 
-                className="bg-spotify-green text-spotify-black hover:bg-spotify-green/90"
-                onClick={() => {
-                  setSpotifyUrl(text);
-                  toast({ title: 'Pasted!', description: 'Link pasted from clipboard detection.', action: <CheckCircle className="text-spotify-green" /> });
-                }}
-              >
-                Paste Link
-              </Button>
-            ),
-            icon: <Info className="text-spotify-green" />
-          });
-        }
-      }
-    } catch (err) {
-      // Silently fail if clipboard access is denied or not available, or if it's not a focused event
-      if (err.name !== 'NotAllowedError' && err.name !== 'SecurityError' && document.hasFocus()) {
-         console.warn('Clipboard read on focus failed:', err.message);
-      }
-    }
-  }, [spotifyUrl, toast]);
-
-
-  useEffect(() => {
-    // Check clipboard when the component mounts and window gains focus
-    if (document.hasFocus()) { // Check immediately if window already has focus
-        checkClipboardOnFocus();
-    }
-    window.addEventListener('focus', checkClipboardOnFocus);
-    return () => {
-      window.removeEventListener('focus', checkClipboardOnFocus);
-    };
-  }, [checkClipboardOnFocus]);
-
 
   const itemVariants = {
     hidden: { y: 20, opacity: 0 },
@@ -155,11 +52,24 @@ const HomePage = () => {
 
   return (
     <motion.div 
-      className="container mx-auto px-4 py-8 flex flex-col items-center min-h-[calc(100vh-200px)] justify-center"
+      className="container mx-auto px-4 py-8 flex flex-col items-center min-h-[calc(100vh-160px)] " 
       initial="hidden"
       animate="visible"
       variants={{ visible: { transition: { staggerChildren: 0.1 }}}}
     >
+      <motion.div 
+        variants={itemVariants}
+        className="w-full max-w-2xl text-center mb-6"
+      >
+        <button 
+          onClick={scrollToAppDownload} 
+          className="inline-flex items-center justify-center px-4 py-2 text-sm font-medium text-spotify-green bg-spotify-gray/60 border border-spotify-green/30 rounded-full hover:bg-spotify-gray/80 transition-colors duration-200 cursor-pointer shadow-md"
+        >
+          <ArrowDownCircle className="w-5 h-5 mr-2 animate-bounce" />
+          Scroll down to download our app if needed
+        </button>
+      </motion.div>
+
       <motion.section variants={itemVariants} className="text-center mb-10">
         <h1 className="text-5xl md:text-6xl font-extrabold mb-4">
           <span className="text-spotify-green">Spotify Song Downloader</span>
@@ -169,7 +79,7 @@ const HomePage = () => {
         </p>
       </motion.section>
 
-      <motion.section variants={itemVariants} className="w-full max-w-2xl">
+      <motion.section variants={itemVariants} className="w-full max-w-2xl mb-12">
         <Card className="glassmorphic shadow-2xl border-spotify-green/30 bg-spotify-gray/70">
           <CardHeader>
             <CardTitle className="text-3xl text-center flex items-center justify-center text-spotify-green">
@@ -181,9 +91,9 @@ const HomePage = () => {
               spotifyUrl={spotifyUrl}
               setSpotifyUrl={setSpotifyUrl}
               handleSubmit={handleSubmit}
-              handlePaste={handlePasteFromClipboard} // Use the renamed function
+              handlePaste={handlePasteFromManualButton}
               isLoading={isLoading}
-              handleFocus={checkClipboardOnFocus} // Pass the renamed function
+              handleFocus={checkClipboardOnFocus} // Passed from useClipboardHandler hook
             />
           </CardContent>
         </Card>
@@ -200,6 +110,15 @@ const HomePage = () => {
       <AnimatePresence>
         {songData && !error && <SongDisplay songData={songData} />}
       </AnimatePresence>
+
+      <DownloadHistorySection 
+        history={downloadHistory}
+        onClear={clearDownloadHistory}
+        onItemClick={handleHistoryItemClick}
+      />
+      
+      <AppDownloadSection ref={appDownloadSectionRef} />
+
     </motion.div>
   );
 };
